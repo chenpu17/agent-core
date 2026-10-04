@@ -73,6 +73,31 @@ class ToolCard(BaseCard):
         self._exposure_declared = value
 
 
+# Attribute used to deduplicate TOOL_CALL_ERROR reporting between the tool
+# lifecycle wrapper (_ToolMeta) and AbilityManager's result-processing loop.
+_TOOL_LIFECYCLE_ERROR_REPORTED = "_tool_lifecycle_error_reported"
+
+
+def mark_tool_lifecycle_error_reported(exc: BaseException) -> None:
+    """Tag an exception that already fired TOOL_CALL_ERROR via _ToolMeta.
+
+    AbilityManager checks the tag (on the exception or its ``__cause__``)
+    before firing the same event again from its result loop, so a failed
+    tool call is reported exactly once. Best effort: exception types that
+    reject attribute assignment keep the pre-existing double report.
+    """
+    try:
+        setattr(exc, _TOOL_LIFECYCLE_ERROR_REPORTED, True)
+    except Exception:  # noqa: BLE001 — exotic exception types without __dict__
+        pass
+
+
+def is_tool_lifecycle_error_reported(exc) -> bool:
+    """Return whether ``exc`` (or None) was already reported by _ToolMeta."""
+    return exc is not None and bool(
+        getattr(exc, _TOOL_LIFECYCLE_ERROR_REPORTED, False))
+
+
 class _ToolMeta(ABCMeta):
     def __call__(cls, *args, **kwargs):
         instance = super().__call__(*args, **kwargs)
@@ -97,10 +122,21 @@ class _ToolMeta(ABCMeta):
                                   result=result)
                 return result
             except Exception as e:
+                from openjiuwen.core.single_agent.interrupt.exception import (
+                    ToolInterruptException,
+                )
+                if isinstance(e, ToolInterruptException):
+                    # Interrupts are control flow, not tool failures.
+                    # AbilityManager's result loop already treats them as
+                    # non-errors; reporting them as TOOL_CALL_ERROR breaks
+                    # consumers that pair the event with request-scoped
+                    # context (duplicate result frames).
+                    raise
                 await _fw.trigger(ToolCallEvents.TOOL_CALL_ERROR,
                                   tool_name=instance.card.name,
                                   tool_id=instance.card.id,
                                   error=e)
+                mark_tool_lifecycle_error_reported(e)
                 raise
 
         instance.invoke = _lifecycle_invoke
@@ -126,10 +162,17 @@ class _ToolMeta(ABCMeta):
                                       tool_name=instance.card.name,
                                       tool_id=instance.card.id)
                 except Exception as e:
+                    from openjiuwen.core.single_agent.interrupt.exception import (
+                        ToolInterruptException,
+                    )
+                    if isinstance(e, ToolInterruptException):
+                        # Same control-flow rule as _lifecycle_invoke above.
+                        raise
                     await _fw.trigger(ToolCallEvents.TOOL_CALL_ERROR,
                                       tool_name=instance.card.name,
                                       tool_id=instance.card.id,
                                       error=e)
+                    mark_tool_lifecycle_error_reported(e)
                     raise
 
             instance.stream = _lifecycle_stream

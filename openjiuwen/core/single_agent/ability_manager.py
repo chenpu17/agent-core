@@ -21,6 +21,7 @@ from openjiuwen.core.foundation.tool import ToolInfo
 from openjiuwen.core.foundation.tool import Tool
 from openjiuwen.core.foundation.tool import ToolCard, ToolExposure
 from openjiuwen.core.foundation.tool import McpServerConfig
+from openjiuwen.core.foundation.tool.base import is_tool_lifecycle_error_reported
 from openjiuwen.core.foundation.tool.mcp.base import mcp_model_tool_name, mcp_model_tool_prefix
 from openjiuwen.core.session.agent import Session
 from openjiuwen.core.single_agent.rail.base import (
@@ -1074,19 +1075,30 @@ class AbilityManager:
                 logger.error(error_msg)
 
                 # Trigger TOOL_CALL_ERROR event for observability
-                # This only affects telemetry collection, not business logic
-                try:
-                    from openjiuwen.core.runner import Runner
-                    from openjiuwen.core.runner.callback.events import ToolCallEvents
-                    tc = tool_calls[i]
-                    await Runner.callback_framework.trigger(
-                        ToolCallEvents.TOOL_CALL_ERROR,
-                        tool_name=tc.name,
-                        tool_id=tc.id,
-                        error=result,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to trigger TOOL_CALL_ERROR event: {e}")
+                # This only affects telemetry collection, not business logic.
+                # Skip when the tool lifecycle wrapper (_ToolMeta) already
+                # reported this failure: tool.invoke exceptions re-raise
+                # through foundation/tool/base.py after firing the event, so
+                # a second trigger here would double-fire — and in parallel
+                # mode it runs outside the lane task, where request-scoped
+                # contextvars are invisible (consumers keyed on those emit
+                # ghost result frames). Pre-invoke failures (argument parse,
+                # MCP allowlist, missing tool, call-scope timeout) never pass
+                # through _ToolMeta and keep their single report here.
+                if not (is_tool_lifecycle_error_reported(result)
+                        or is_tool_lifecycle_error_reported(result.__cause__)):
+                    try:
+                        from openjiuwen.core.runner import Runner
+                        from openjiuwen.core.runner.callback.events import ToolCallEvents
+                        tc = tool_calls[i]
+                        await Runner.callback_framework.trigger(
+                            ToolCallEvents.TOOL_CALL_ERROR,
+                            tool_name=tc.name,
+                            tool_id=tc.id,
+                            error=result,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger TOOL_CALL_ERROR event: {e}")
 
                 tool_result = None
                 tool_message = None
