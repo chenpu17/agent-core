@@ -8,7 +8,7 @@ import hashlib
 
 import aiohttp
 from aiohttp import ClientSession
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from openjiuwen.core.common.clients import get_connector_pool_manager
 from openjiuwen.core.common.clients.ref_counted import BaseRefResourceMgr, RefCountedResource
@@ -124,10 +124,10 @@ class SessionConfig(BaseModel):
 
         return key_str
 
-    class Config:
-        """Pydantic model configuration."""
-        arbitrary_types_allowed = True  # Allow types like aiohttp.BasicAuth for auth field
-        extra = "forbid"  # Forbid extra fields not defined in the model
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,  # Allow types like aiohttp.BasicAuth for auth field
+        extra="forbid",  # Forbid extra fields not defined in the model
+    )
 
 
 class HttpSession(RefCountedResource):

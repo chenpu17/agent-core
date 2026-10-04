@@ -7,7 +7,7 @@ from abc import abstractmethod
 import hashlib
 
 from aiohttp import TCPConnector
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, ConfigDict, field_validator, Field
 
 from openjiuwen.core.common.logging import logger
 from openjiuwen.core.common.clients.ref_counted import RefCountedResource
@@ -98,10 +98,10 @@ class ConnectorPoolConfig(BaseModel):
         md5_hash = hashlib.md5(key_str.encode()).hexdigest()
         return md5_hash
 
-    class Config:
-        """Pydantic model configuration."""
-        frozen = True  # Make configuration immutable, suitable for use as a key
-        extra = 'forbid'  # Forbid extra fields
+    model_config = ConfigDict(
+        frozen=True,  # Make configuration immutable, suitable for use as a key
+        extra='forbid',  # Forbid extra fields
+    )
 
 
 class ConnectorPool(RefCountedResource):
